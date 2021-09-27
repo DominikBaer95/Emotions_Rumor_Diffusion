@@ -1,6 +1,6 @@
 # Emotions in online rumor diffusion
 
-This repository contains the code for contains the implementation of “Emotions in online rumor diffusion”, published in EPJ Data Science.
+This repository contains the code for the implementation of “Emotions in online rumor diffusion”, published in EPJ Data Science.
 
 ## Abstract
 
