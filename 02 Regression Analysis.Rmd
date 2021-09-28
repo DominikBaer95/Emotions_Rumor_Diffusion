@@ -1,0 +1,194 @@
+---
+title: "Emotions in Online Rumor Diffusion"
+header-includes:
+   - \usepackage{dcolumn}
+   - \usepackage{booktabs}
+   - \usepackage{float}
+   - \usepackage{longtable}
+   - \usepackage{multirow}
+   - \usepackage{siunitx}
+output:
+  pdf_document:
+    toc: yes
+    keep_tex: no
+    number_sections: yes
+    
+---
+
+```{r library, include=FALSE}
+
+library(tidyverse)
+library(lme4)
+library(MASS)
+library(texreg)
+library(xtable)
+library(knitr)
+
+options(xtable.comment = FALSE)
+opts_chunk$set(echo = FALSE, warnings = FALSE, fig.pos='H')
+options(width = 80)
+
+```
+
+```{r functions, include = FALSE}
+
+# Make formula
+make_formula <- function(dv, ev, controls) {
+  frmla <-
+    as.formula(paste(
+      dv,
+      paste(c(ev, controls), collapse = " + "), 
+      sep = " ~ "
+    ))
+  return(frmla)
+}
+
+```
+
+```{r load data}
+
+load("regression_df.Rda")
+
+```
+
+# Descriptive statistics
+
+## Number of rumor cascades
+
+```{r, echo = FALSE, warning=F}
+
+nrow(regression_df)
+
+```
+
+## Number of rumors
+
+```{r, echo = FALSE, warning=F}
+
+regression_df %>% summarize(Num_Rumors = length(unique(rumor_id)))
+
+```
+
+# Regression analysis
+
+## Data preparation
+
+```{r message=F, warning=F}
+
+regression_df <- regression_df %>% filter(complete.cases(.))
+
+## Scaling
+
+vars_standardize <- c("cascade_depth", "cascade_size", "cascade_duration", "cascade_virality", "user_engagement", "sentiment", 
+                      "diff_joy_sadness", "diff_trust_disgust", "diff_anger_fear", "diff_anticipation_surprise", "user_account_age", 
+                      "user_followers", "user_followees", "diff_optimism_disapproval", 
+                      "diff_hope_unbelief", "diff_anxiety_outrage", "diff_love_remorse",
+                      "diff_guilt_envy", "diff_delight_pessimism", "diff_submission_contempt", "diff_curiosity_cynicism", 
+                      "diff_sentimentality_morbidness", "diff_awe_aggressiveness", "diff_despair_pride", "diff_shame_dominance")
+
+regression_df <- regression_df %>%
+  mutate_at(vars(matches(paste0(vars_standardize, collapse = "|"))),
+            funs(log = log(1 + .))) %>% 
+  mutate_at(vars(matches(paste0(vars_standardize, collapse = "|"))), 
+            .funs = funs(scaled = scale(.) %>% as.vector)) 
+
+```
+
+## Regression: bipolar emotion pairs
+
+```{r, eval=T, echo=F, message=F, warning=F, results="asis"}
+
+vars_control <- c("user_engagement_scaled", "user_verified", "user_account_age_scaled", "user_followers_scaled", "user_followees_scaled")
+
+## Cascade size (controls only)
+mod_controls <- glm.nb(make_formula("cascade_size", c(vars_control), c()), data = regression_df, link = log)
+
+```
+
+```{r, eval=T, message=T, warning=T, results="asis"}
+
+vars_ev <- c("diff_joy_sadness_scaled", "diff_trust_disgust_scaled", "diff_anger_fear_scaled", "diff_anticipation_surprise_scaled")
+
+## Cascade size
+mod_oe_size <- glmer(make_formula("cascade_size", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                     family = negative.binomial(theta = mod_controls$theta, link = "log"), data = regression_df, 
+                     nAGQ = 0, control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)))
+
+## Cascade lifetime
+mod_oe_lifetime <- lmer(make_formula("cascade_duration_log", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                        data = regression_df %>% filter(cascade_duration != 0))
+
+## Cascade virality
+mod_oe_virality <- glmer(make_formula("cascade_virality", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                         nAGQ = 0, control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                         data = regression_df, family = Gamma(link = "log"))
+
+texreg(list(mod_oe_size, mod_oe_lifetime, mod_oe_virality), 
+       dcolumn = T, use.packages = F, stars = c(0.05, 0.01, 0.001), fontsize = "footnotesize", float.pos = "h",
+       include.bic = F, include.deviance = F, digits = 3)
+
+```
+
+## Regression: emotion dyads
+
+```{r, eval=T, message=T, warning=T, results="asis"}
+
+vars_ev <- c("diff_optimism_disapproval_scaled", "diff_hope_unbelief_scaled", "diff_anxiety_outrage_scaled", 
+             "diff_love_remorse_scaled", "diff_guilt_envy_scaled", "diff_delight_pessimism_scaled", 
+             "diff_submission_contempt", "diff_curiosity_cynicism_scaled", "diff_sentimentality_morbidness_scaled", 
+             "diff_awe_aggressiveness_scaled", "diff_despair_pride_scaled", "diff_shame_dominance_scaled")
+
+## Cascade size
+models_dyads_size <- map(c(1:length(vars_ev)), 
+                         function(x) glmer(make_formula("cascade_size", c(vars_control, vars_ev[x], "(1 | rumor_id)"), c()), 
+                                           data = regression_df, family = negative.binomial(theta = mod_controls$theta, link = "log"), 
+                                           nAGQ = 0, control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))))
+
+texreg(models_dyads_size, fontsize = "scriptsize")  
+
+## Cascade lifetime
+models_dyads_duration <- map(c(1:length(vars_ev)), 
+                             function(x) glmer(make_formula("cascade_duration_log", c(vars_control, vars_ev[x], "(1 | rumor_id)"), c()), 
+                                                                     data = regression_df %>% filter(cascade_duration != 0)))
+
+texreg(models_dyads_duration, fontsize = "scriptsize")
+
+## Structural virality
+models_dyads_virality <- map(c(1:length(vars_ev)), 
+                             function(x) glmer(make_formula("cascade_virality", c(vars_control, vars_ev[x], "(1 | rumor_id)"), c()), 
+                                               nAGQ = 0, control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                                               data = regression_df, family = Gamma(link = "log")))
+
+texreg(models_dyads_virality, fontsize = "scriptsize")
+
+```
+
+## Sensitivity Analysis: Topics
+
+```{r, eval=T, message=T, warning=T, results="asis"}
+
+vars_ev <- c("diff_joy_sadness_scaled", "diff_trust_disgust_scaled", "diff_anger_fear_scaled", "diff_anticipation_surprise_scaled")
+
+mods_size_topics <- map(c("Politics", "Science and Health", "Business"), 
+                        function(x) glmer(make_formula("cascade_size", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                                          family = negative.binomial(theta = mod_controls$theta, link = "log"), nAGQ = 0, 
+                                          control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                                          data = filter(regression_df, topic == x)))
+
+texreg(mods_size_topics)
+
+mods_lifetime_topics <- map(c("Politics", "Science and Health", "Business"), 
+                             function(x) lmer(make_formula("cascade_duration_log", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                 data = regression_df %>% filter(topic == x & cascade_duration != 0)))
+
+texreg(mods_lifetime_topics)
+
+mods_virality_topics <- map(c("Politics", "Science and Health", "Business"), 
+                            function(x) glmer(make_formula("cascade_virality", c(vars_control, vars_ev, "(1 | rumor_id)"), c()), 
+                                              family = Gamma(link = "log"), nAGQ = 0, 
+                                              control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                                              data = filter(regression_df, topic == x)))
+
+texreg(mods_virality_topics)
+
+```
